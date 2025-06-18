@@ -16,6 +16,7 @@ from enum import Enum
 import shutil
 import pickle
 from pathlib import Path
+from contextlib import asynccontextmanager
 import tempfile
 
 # Define the skin conditions based on your notebook
@@ -115,29 +116,13 @@ class PredictionResponse(BaseModel):
     confidence: float
     all_probabilities: dict
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="Skin Cancer Detection API",
-    description="API for detecting skin cancer from images and patient metadata",
-    version="1.0.0"
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Global variables for model
 model = None
 device = None
 transform = None
 
-@app.on_event("startup")
 async def load_model():
+    """Load the model during startup"""
     global model, device, transform
     
     # Set device
@@ -242,6 +227,33 @@ async def load_model():
         print(f"Error type: {type(e)}")
         model = None
         transform = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern lifespan event handler"""
+    # Startup
+    print("Starting up...")
+    await load_model()
+    yield
+    # Shutdown
+    print("Shutting down...")
+
+# Initialize FastAPI app with lifespan
+app = FastAPI(
+    title="Skin Cancer Detection API",
+    description="API for detecting skin cancer from images and patient metadata",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def process_image_from_upload(upload_file: UploadFile) -> Image.Image:
     """
@@ -398,6 +410,11 @@ async def health_check():
 async def get_conditions():
     """Get the list of skin conditions the model can detect"""
     return {"conditions": SKIN_CONDITIONS}
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {"message": "Skin Cancer Detection API", "status": "running"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

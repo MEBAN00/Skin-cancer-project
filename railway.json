@@ -1,8 +1,11 @@
 {
+  "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "dockerfile"
+    "builder": "DOCKERFILE"
   },
   "deploy": {
-    "startCommand": "python api.py"
+    "startCommand": "python -m uvicorn api:app --host 0.0.0.0 --port $PORT",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300
   }
 }
