@@ -147,7 +147,6 @@ async def load_model():
     os.makedirs("models", exist_ok=True)
     model_path = "model/final_convnext_tiny.pth"
     
-    
     # Check if model exists
     if not os.path.exists(model_path):
         print(f"Model not found at {model_path}. Please ensure the model file is uploaded.")
@@ -167,20 +166,82 @@ async def load_model():
             convnext_variant='tiny'
         ).to(device)
         
-        # Load model weights
-        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint)
-        model.eval()
-        print("Model loaded successfully")
+        # Check model file integrity before loading
+        print(f"Model file path: {model_path}")
+        print(f"Model file exists: {os.path.exists(model_path)}")
         
-        # Define transformation
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        if os.path.exists(model_path):
+            file_size = os.path.getsize(model_path)
+            print(f"Model file size: {file_size} bytes")
+            
+            # Read first few bytes to check file format
+            with open(model_path, 'rb') as f:
+                first_bytes = f.read(10)
+                print(f"First 10 bytes: {first_bytes}")
+                print(f"First 10 bytes as hex: {first_bytes.hex()}")
+        
+        # Try to load model weights with better error handling
+        try:
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            print(f"Checkpoint loaded successfully. Type: {type(checkpoint)}")
+            
+            # Check if checkpoint is a state dict or contains state dict
+            if isinstance(checkpoint, dict):
+                if 'state_dict' in checkpoint:
+                    print("Loading from checkpoint['state_dict']")
+                    model.load_state_dict(checkpoint['state_dict'])
+                elif 'model_state_dict' in checkpoint:
+                    print("Loading from checkpoint['model_state_dict']")
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                else:
+                    print("Loading checkpoint directly as state_dict")
+                    model.load_state_dict(checkpoint)
+            else:
+                print("Checkpoint is not a dictionary, attempting direct load")
+                model.load_state_dict(checkpoint)
+                
+            model.eval()
+            print("Model loaded and set to eval mode successfully")
+            
+            # Initialize transform ONLY after successful model loading
+            transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            print("Transform initialized successfully")
+            
+        except Exception as load_error:
+            print(f"Error during torch.load: {load_error}")
+            print(f"Error type: {type(load_error)}")
+            
+            # Try alternative loading methods
+            try:
+                print("Trying to load with weights_only=True...")
+                checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+                model.load_state_dict(checkpoint)
+                model.eval()
+                print("Model loaded successfully with weights_only=True")
+                
+                # Initialize transform ONLY after successful model loading
+                transform = transforms.Compose([
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                ])
+                print("Transform initialized successfully")
+                
+            except Exception as alt_error:
+                print(f"Alternative loading also failed: {alt_error}")
+                model = None
+                transform = None
+                raise load_error
+        
     except Exception as e:
         print(f"Error loading model: {e}")
+        print(f"Error type: {type(e)}")
+        model = None
+        transform = None
 
 def process_image_from_upload(upload_file: UploadFile) -> Image.Image:
     """
