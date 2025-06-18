@@ -262,7 +262,7 @@ def predict_skin_condition(image_path, metadata):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error making prediction: {str(e)}")
 
-@app.post("/predict-final", response_model=PredictionResponse)
+@app.post("/predict", response_model=PredictionResponse)
 async def predict(
     image: UploadFile = File(...),
     gender: Gender = Form(...),
