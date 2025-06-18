@@ -15,7 +15,7 @@ import torch.nn as nn
 from enum import Enum
 import shutil
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+import tempfile
 
 # Define the skin conditions based on your notebook
 SKIN_CONDITIONS = [
@@ -25,7 +25,7 @@ SKIN_CONDITIONS = [
     "NEV-Nevus", 
     "SCC-Squamous Cell Carcinoma", 
     "SEK-Seborrheic Keratosis"
-]  # Update this list with your actual skin conditions
+]
 
 # Define the ConvNeXt model with metadata
 class ConvNeXtWithMetadata(nn.Module):
@@ -38,16 +38,16 @@ class ConvNeXtWithMetadata(nn.Module):
         # Load the appropriate ConvNeXt variant
         if convnext_variant == 'tiny':
             self.base_model = models.convnext_tiny(pretrained=True)
-            num_features = 768  # Feature dimension for convnext_tiny
+            num_features = 768
         elif convnext_variant == 'small':
             self.base_model = models.convnext_small(pretrained=True)
-            num_features = 768  # Feature dimension for convnext_small
+            num_features = 768
         elif convnext_variant == 'base':
             self.base_model = models.convnext_base(pretrained=True)
-            num_features = 1024  # Feature dimension for convnext_base
+            num_features = 1024
         elif convnext_variant == 'large':
             self.base_model = models.convnext_large(pretrained=True)
-            num_features = 1536  # Feature dimension for convnext_large
+            num_features = 1536
         else:
             raise ValueError(f"Unknown ConvNeXt variant: {convnext_variant}")
         
@@ -124,10 +124,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Global variables for model
@@ -147,10 +147,10 @@ async def load_model():
     os.makedirs("models", exist_ok=True)
     model_path = "model/final_convnext_tiny.pth"
     
-    # Check if model exists, if not you would need to provide it
+    # Check if model exists
     if not os.path.exists(model_path):
         print(f"Model not found at {model_path}. Please download the model.")
-        # In production, you might want to download the model from a storage service
+        return
     
     # Initialize model
     try:
@@ -174,24 +174,31 @@ async def load_model():
     except Exception as e:
         print(f"Error loading model: {e}")
 
-def save_upload_file_tmp(upload_file: UploadFile) -> Path:
-    """Save an upload file to a temporary file"""
+def process_image_from_upload(upload_file: UploadFile) -> Image.Image:
+    """
+    Process image directly from upload file without saving to disk
+    This is more reliable on cloud platforms like Railway
+    """
     try:
-        suffix = Path(upload_file.filename).suffix
-        with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            shutil.copyfileobj(upload_file.file, tmp)
-            tmp_path = Path(tmp.name)
-        upload_file.file.close()
-        return tmp_path
-    except Exception:
-        return None
+        # Read the file content
+        contents = upload_file.file.read()
+        
+        # Reset file pointer for potential future reads
+        upload_file.file.seek(0)
+        
+        # Create PIL Image from bytes
+        image = Image.open(io.BytesIO(contents)).convert('RGB')
+        
+        return image
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}")
 
-def predict_skin_condition(image_path, metadata):
+def predict_skin_condition(image: Image.Image, metadata):
     """
     Make prediction using the trained model
     
     Args:
-        image_path: Path to the image file
+        image: PIL Image object
         metadata: Dictionary containing patient metadata
     
     Returns:
@@ -204,12 +211,11 @@ def predict_skin_condition(image_path, metadata):
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
-    # Load and preprocess the image
+    # Preprocess the image
     try:
-        image = Image.open(image_path).convert('RGB')
-        image_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
+        image_tensor = transform(image).unsqueeze(0).to(device)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error transforming image: {str(e)}")
     
     # Process metadata
     try:
@@ -222,8 +228,8 @@ def predict_skin_condition(image_path, metadata):
         try:
             age = float(metadata.get('age', 50.0))
         except (ValueError, TypeError):
-            age = 50.0  # Default age if invalid
-        age_normalized = age / 100.0  # Normalize age
+            age = 50.0
+        age_normalized = age / 100.0
         
         # Process gender
         if isinstance(metadata.get('gender'), (int, float)):
@@ -231,7 +237,7 @@ def predict_skin_condition(image_path, metadata):
         elif isinstance(metadata.get('gender'), str):
             gender = 1 if metadata.get('gender', '').lower() in ['male', 'm', '1'] else 0
         else:
-            gender = 0  # Default gender
+            gender = 0
         
         # Create metadata tensor
         metadata_tensor = torch.tensor([
@@ -240,7 +246,7 @@ def predict_skin_condition(image_path, metadata):
             history,
             age_normalized,
             gender
-        ], dtype=torch.float32).unsqueeze(0).to(device)  # Add batch dimension
+        ], dtype=torch.float32).unsqueeze(0).to(device)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing metadata: {str(e)}")
     
@@ -273,16 +279,11 @@ async def predict(
 ):
     """
     Predict skin cancer condition from an image and patient metadata.
-    
-    - **image**: The skin lesion image file
-    - **gender**: Patient's gender (male/female)
-    - **age**: Patient's age
-    - **smoke**: Whether the patient smokes (yes/no)
-    - **drink**: Whether the patient drinks alcohol (yes/no)
-    - **skin_cancer_history**: Whether the patient has skin cancer history (yes/no)
-    
-    Returns the predicted skin condition and confidence scores.
     """
+    # Validate file type
+    if not image.content_type or not image.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
     # Validate age
     if age <= 0 or age > 120:
         raise HTTPException(status_code=400, detail="Age must be between 1 and 120")
@@ -296,20 +297,15 @@ async def predict(
         "skin_cancer_history": skin_cancer_history
     }
     
-    # Save uploaded image to temporary file
-    temp_file = save_upload_file_tmp(image)
-    if temp_file is None:
-        raise HTTPException(status_code=400, detail="Failed to process the image")
-    
     try:
+        # Process image directly from upload
+        processed_image = process_image_from_upload(image)
+        
         # Get prediction
-        predicted_class, class_probabilities = predict_skin_condition(temp_file, metadata)
+        predicted_class, class_probabilities = predict_skin_condition(processed_image, metadata)
         
         # Get confidence score for predicted class
         confidence = class_probabilities[predicted_class]
-        
-        # Delete temporary file
-        os.unlink(temp_file)
         
         # Return response
         return PredictionResponse(
@@ -317,11 +313,10 @@ async def predict(
             confidence=confidence,
             all_probabilities=class_probabilities
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up temp file in case of error
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/health")
 async def health_check():
@@ -336,5 +331,5 @@ async def get_conditions():
     return {"conditions": SKIN_CONDITIONS}
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))  # Railway provides PORT env variable
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
