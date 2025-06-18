@@ -147,9 +147,16 @@ async def load_model():
     os.makedirs("models", exist_ok=True)
     model_path = "model/final_convnext_tiny.pth"
     
+    
     # Check if model exists
     if not os.path.exists(model_path):
-        print(f"Model not found at {model_path}. Please download the model.")
+        print(f"Model not found at {model_path}. Please ensure the model file is uploaded.")
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Files in current directory: {os.listdir('.')}")
+        if os.path.exists("model"):
+            print(f"Files in model directory: {os.listdir('model')}")
+        else:
+            print("Model directory does not exist")
         return
     
     # Initialize model
@@ -161,7 +168,8 @@ async def load_model():
         ).to(device)
         
         # Load model weights
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint)
         model.eval()
         print("Model loaded successfully")
         
