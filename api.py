@@ -14,6 +14,7 @@ import torchvision.transforms as transforms
 import torch.nn as nn
 from enum import Enum
 import shutil
+import pickle
 from pathlib import Path
 import tempfile
 
@@ -168,24 +169,36 @@ async def load_model():
         
         # Check model file integrity before loading
         print(f"Model file path: {model_path}")
-        print(f"Model file exists: {os.path.exists(model_path)}")
+        file_size = os.path.getsize(model_path)
+        print(f"Model file size: {file_size} bytes")
         
-        if os.path.exists(model_path):
-            file_size = os.path.getsize(model_path)
-            print(f"Model file size: {file_size} bytes")
+        # Check if file is too small (likely corrupted)
+        if file_size < 1000:  # Less than 1KB is definitely wrong
+            print(f"ERROR: Model file is too small ({file_size} bytes). File is likely corrupted.")
+            model = None
+            transform = None
+            return
+        
+        # Read first few bytes to check file format
+        with open(model_path, 'rb') as f:
+            first_bytes = f.read(20)
+            print(f"First 20 bytes as hex: {first_bytes.hex()}")
             
-            # Read first few bytes to check file format
-            with open(model_path, 'rb') as f:
-                first_bytes = f.read(10)
-                print(f"First 10 bytes: {first_bytes}")
-                print(f"First 10 bytes as hex: {first_bytes.hex()}")
+            # Check if it starts with pickle protocol
+            if not first_bytes.startswith(b'\x80'):
+                print("ERROR: File does not appear to be a valid pickle/PyTorch file")
+                print("Expected to start with \\x80 (pickle protocol), but got:", first_bytes[:4].hex())
+                model = None
+                transform = None
+                return
         
-        # Try to load model weights with better error handling
+        # Try to load model weights
         try:
+            print("Attempting to load model with weights_only=False...")
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
             print(f"Checkpoint loaded successfully. Type: {type(checkpoint)}")
             
-            # Check if checkpoint is a state dict or contains state dict
+            # Handle different checkpoint formats
             if isinstance(checkpoint, dict):
                 if 'state_dict' in checkpoint:
                     print("Loading from checkpoint['state_dict']")
@@ -211,34 +224,21 @@ async def load_model():
             ])
             print("Transform initialized successfully")
             
-        except Exception as load_error:
-            print(f"Error during torch.load: {load_error}")
-            print(f"Error type: {type(load_error)}")
+        except pickle.UnpicklingError as pickle_error:
+            print(f"PICKLE ERROR: {pickle_error}")
+            print("This indicates the model file is corrupted or in wrong format.")
+            print("Please re-upload your model file to Railway.")
+            model = None
+            transform = None
             
-            # Try alternative loading methods
-            try:
-                print("Trying to load with weights_only=True...")
-                checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-                model.load_state_dict(checkpoint)
-                model.eval()
-                print("Model loaded successfully with weights_only=True")
-                
-                # Initialize transform ONLY after successful model loading
-                transform = transforms.Compose([
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                ])
-                print("Transform initialized successfully")
-                
-            except Exception as alt_error:
-                print(f"Alternative loading also failed: {alt_error}")
-                model = None
-                transform = None
-                raise load_error
+        except Exception as load_error:
+            print(f"Error during model loading: {load_error}")
+            print(f"Error type: {type(load_error)}")
+            model = None
+            transform = None
         
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"Error initializing model: {e}")
         print(f"Error type: {type(e)}")
         model = None
         transform = None
